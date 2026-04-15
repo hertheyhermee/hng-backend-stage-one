@@ -1,32 +1,62 @@
 import axios from "axios";
 import { ApiError } from "../utils/apiError.js";
 
-const fetchUserData = async (name) => {
-  const client = axios.create({
-    timeout: 5000,
-  });
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const fetchWithRetry = async (url, apiName, retries = 3, delay = 1000) => {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const response = await axios.get(url, {
+        timeout: 8000,
+        headers: {
+          "User-Agent": "Mozilla/5.0",
+        },
+      });
+      return response;
+    } catch (error) {
+      const statusCode = error?.response?.status;
+      const isRateLimit = statusCode === 429;
+      const isLastAttempt = attempt === retries;
+
+      console.error(
+        `${apiName} attempt ${attempt}/${retries}: ${error.message}`
+      );
+
+      if (isLastAttempt) {
+        throw new ApiError(502, `${apiName} returned an invalid response`);
+      }
+
+      if (isRateLimit) {
+        const waitTime = delay * Math.pow(2, attempt - 1);
+        console.log(`Rate limited. Waiting ${waitTime}ms before retry...`);
+        await sleep(waitTime);
+      } else {
+        await sleep(delay);
+      }
+    }
+  }
+};
+
+const fetchUserData = async (name) => {
   try {
-    const [genderRes, ageRes, nationRes] = await Promise.all([
-      client
-        .get(`https://api.genderize.io?name=${name}`)
-        .catch((error) => {
-          console.error("Genderize error:", error.message);
-          throw new ApiError(502, "Genderize returned an invalid response");
-        }),
-      client
-        .get(`https://api.agify.io?name=${name}`)
-        .catch((error) => {
-          console.error("Agify error:", error.message);
-          throw new ApiError(502, "Agify returned an invalid response");
-        }),
-      client
-        .get(`https://api.nationalize.io?name=${name}`)
-        .catch((error) => {
-          console.error("Nationalize error:", error.message);
-          throw new ApiError(502, "Nationalize returned an invalid response");
-        }),
-    ]);
+    const genderRes = await fetchWithRetry(
+      `https://api.genderize.io?name=${name}`,
+      "Genderize"
+    );
+
+    await sleep(500);
+
+    const ageRes = await fetchWithRetry(
+      `https://api.agify.io?name=${name}`,
+      "Agify"
+    );
+
+    await sleep(500);
+
+    const nationRes = await fetchWithRetry(
+      `https://api.nationalize.io?name=${name}`,
+      "Nationalize"
+    );
 
     return { genderRes, ageRes, nationRes };
   } catch (error) {
