@@ -1,67 +1,174 @@
-# HNG Backend Stage 1
+# HNG Backend Stage 2 - Intelligence Query Engine
 
-A Node.js/Express API for managing user profiles with external API integrations (Genderize, Agify, Nationalize) and MongoDB persistence.
-
-## Features
-
-- Create, retrieve, list, and delete user profiles
-- Automatic age group classification and nationality detection
-- Idempotent profile creation (prevents duplicates)
-- Filtering support for profiles
-- Comprehensive error handling
+Express + MongoDB backend for profile intelligence queries with advanced filtering, sorting, pagination, and rule-based natural language parsing.
 
 ## Setup
 
-1. Clone the repository
-2. Install dependencies: `npm install`
-3. Create a `.env` file with your MongoDB connection string:
+1. Clone the repository.
+2. Install dependencies:
+   ```bash
+   npm install
    ```
-   MONGO_CONN_STRING=mongodb://localhost:27017/hng-stage-one
+3. Create `.env`:
+   ```env
+   MONGO_CONN_STRING=mongodb://localhost:27017/hng-stage-two
+   PORT=3000
    ```
-4. Run in development: `npm run dev`
-5. Or build and run: `npm start`
+4. Start API:
+   ```bash
+   npm run dev
+   ```
+
+## Profiles Table Structure
+
+Each profile stored in MongoDB follows the required fields:
+
+- `id` - UUID v7 (unique)
+- `name` - unique lowercase full name
+- `gender` - `male` or `female`
+- `gender_probability` - float
+- `age` - integer
+- `age_group` - `child | teenager | adult | senior`
+- `country_id` - ISO 2 code (e.g. `NG`)
+- `country_name` - full country name
+- `country_probability` - float
+- `created_at` - UTC timestamp (ISO 8601 in JSON response)
+
+## Seeding 2026 Profiles
+
+Place the provided JSON file at `src/data/seed_profiles.json` (or pass a custom file path).
+
+Run:
+
+```bash
+npm run seed
+```
+
+Custom path:
+
+```bash
+node src/scripts/seedProfiles.js /absolute/or/relative/path/to/profiles.json
+```
+
+Seed behavior:
+
+- Upserts by unique `name` to prevent duplicates on re-run.
+- Uses UUID v7 for newly inserted records.
+- Updates existing records without changing their existing `id`.
 
 ## API Endpoints
 
-- `POST /api/profiles` - Create a new profile
-- `GET /api/profiles` - Get all profiles (with optional filters: `gender`, `country_id`, `age_group`)
-- `GET /api/profiles/:id` - Get a single profile by ID
-- `DELETE /api/profiles/:id` - Delete a profile by ID
+### `POST /api/profiles`
+Creates a profile from external demographic providers.
 
-## Request/Response Examples
+### `GET /api/profiles`
+Supports all filters in one request:
 
-### Create Profile
-```json
-POST /api/profiles
-{
-  "name": "ella"
-}
-```
+- `gender`
+- `age_group`
+- `country_id`
+- `min_age`
+- `max_age`
+- `min_gender_probability`
+- `min_country_probability`
+- `sort_by` (`age | created_at | gender_probability`)
+- `order` (`asc | desc`)
+- `page` (default `1`)
+- `limit` (default `10`, max `50`)
 
 Response:
+
 ```json
 {
   "status": "success",
-  "data": {
-    "id": "uuid-v7",
-    "name": "ella",
-    "gender": "female",
-    "gender_probability": 0.99,
-    "sample_size": 1234,
-    "age": 46,
-    "age_group": "adult",
-    "country_id": "DRC",
-    "country_probability": 0.85,
-    "created_at": "2026-04-01T12:00:00Z"
-  }
+  "page": 1,
+  "limit": 10,
+  "total": 2026,
+  "data": []
 }
 ```
 
-## Environment Variables
+### `GET /api/profiles/search?q=...`
+Rule-based natural language filter parsing with pagination (`page`, `limit`).
 
-- `MONGO_CONN_STRING` - MongoDB connection URL
-- `PORT` - Server port (default: 3000)
+If query cannot be interpreted:
 
-## License
+```json
+{
+  "status": "error",
+  "message": "Unable to interpret query"
+}
+```
 
-ISC
+### `GET /api/profiles/:id`
+Fetch one profile by UUID v7.
+
+### `DELETE /api/profiles/:id`
+Deletes a profile by UUID v7.
+
+## Natural Language Parsing Approach
+
+Parser is deterministic and keyword/rule driven (no AI/LLM).
+
+### 1) Normalization
+
+- Lowercases input.
+- Removes punctuation.
+- Collapses repeated spaces.
+
+### 2) Supported keyword mappings
+
+- Gender terms:
+  - male terms (`male`, `males`, `man`, `men`, `boy`, `boys`) -> `gender=male`
+  - female terms (`female`, `females`, `woman`, `women`, `girl`, `girls`) -> `gender=female`
+  - if both male and female appear, gender filter is omitted
+- Age-group terms:
+  - `child`, `children`, `kid`, `kids` -> `age_group=child`
+  - `teenager`, `teenagers`, `teen`, `teens` -> `age_group=teenager`
+  - `adult`, `adults` -> `age_group=adult`
+  - `senior`, `seniors`, `elderly`, `old people` -> `age_group=senior`
+- `young` -> `min_age=16`, `max_age=24`
+- Numeric age rules:
+  - `above|over|older than|greater than|at least N` -> `min_age=N`
+  - `below|under|younger than|less than|at most N` -> `max_age=N`
+  - `between N and M` -> `min_age=min(N,M)`, `max_age=max(N,M)`
+- Country rules:
+  - `from <country>` resolves to `country_id` (supports ISO code or country name)
+
+### 3) Query interpretation
+
+- Parser builds a filter object from detected rules.
+- If no rule matches, request fails with `Unable to interpret query`.
+- If parsed age bounds conflict (`min_age > max_age`), request fails.
+
+## Parser Limitations
+
+- Does not support multilingual or misspelled country names.
+- Country extraction currently expects country to appear at the end after `from ...`.
+- No support for advanced boolean groupings like nested conditions.
+- Does not interpret vague qualitative phrases beyond supported keywords (e.g. `middle aged`).
+- Only exact supported patterns are parsed; unknown patterns return interpret error.
+
+## Validation and Error Format
+
+All errors return:
+
+```json
+{
+  "status": "error",
+  "message": "<error message>"
+}
+```
+
+Main validation rules:
+
+- Missing/empty required parameter -> `400`
+- Invalid query parameter shape/type/value -> `422` with `Invalid query parameters`
+- Not found -> `404`
+- Internal/upstream errors -> `500/502`
+
+## CORS
+
+API responds with:
+
+`Access-Control-Allow-Origin: *`
