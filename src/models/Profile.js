@@ -31,12 +31,6 @@ const profileSchema = new mongoose.Schema(
       max: 1,
     },
 
-    sample_size: {
-      type: Number,
-      required: true,
-      min: 0,
-    },
-
     age: {
       type: Number,
       required: true,
@@ -52,6 +46,16 @@ const profileSchema = new mongoose.Schema(
     country_id: {
       type: String,
       required: true,
+      minlength: 2,
+      maxlength: 2,
+      uppercase: true,
+      index: true,
+    },
+
+    country_name: {
+      type: String,
+      required: true,
+      trim: true,
     },
 
     country_probability: {
@@ -64,13 +68,17 @@ const profileSchema = new mongoose.Schema(
     created_at: {
       type: Date,
       required: true,
-      default: () => new Date(), // UTC ISO handled automatically
+      default: Date.now,
     },
   },
   {
     versionKey: false, // removes __v
   }
 );
+
+profileSchema.index({ gender: 1, age_group: 1, country_id: 1, age: 1 });
+profileSchema.index({ created_at: -1 });
+profileSchema.index({ gender_probability: -1 });
 
 profileSchema.set("toJSON", {
   transform: (doc, ret) => {
